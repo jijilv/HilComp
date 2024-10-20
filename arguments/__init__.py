@@ -79,16 +79,16 @@ class CompressionParams(ParamGroup):
         self.color_batch_size = 2**18
         self.color_weights_per_param = False
         self.color_compress_non_dir = True
-        #self.not_compress_color = False
-        self.not_compress_color = True
+        self.not_compress_color = False
+        # self.not_compress_color = True
 
         self.gaussian_codebook_size = 2**12
         self.gaussian_importance_include = 0.3*1e-5
         self.gaussian_cluster_iterations = 800
         self.gaussian_decay = 0.8
         self.gaussian_batch_size = 2**20
-        self.not_compress_gaussians = False
-        #self.not_compress_gaussians = True
+        # self.not_compress_gaussians = False
+        self.not_compress_gaussians = True
         self.not_sort_morton = False
         
         self.prune_threshold = 0.

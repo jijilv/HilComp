@@ -1,43 +1,47 @@
 import numpy as np
 import pandas as pd
 
-# 加载 npz 文件
-npz_file = np.load('/home/kemove/github/c3dgs/output/bonsai/point_cloud/iteration_35000/point_cloud.npz')
+# 加载npz文件
+npz_file = np.load("/home/kemove/output/drjohnson-1/point_cloud/iteration_35000/point_cloud.npz")
 
-# 加载 'features_dc' 和 'features_rest'
-features_dc = npz_file['features_dc']  # (110509, 1, 3)
-features_rest = npz_file['features_rest']  # (110509, 15, 3)
+# 创建一个Excel writer对象
+excel_writer = pd.ExcelWriter('/home/kemove/output/drjohnson-1/point_cloud/iteration_35000/drjohnson-1.xlsx', engine='xlsxwriter')
 
-# 将 'features_dc' 和 'features_rest' 转换为 2D 数据
-features_dc_reshaped = features_dc.reshape(110509, 3)  # (110509, 3)
-features_rest_reshaped = features_rest.reshape(110509, 45)  # (110509, 45)
+# 创建一个字典来存储每个数组的长度
+array_lengths = {}
 
-# 将两个数组合并为一个大的 DataFrame
-combined_features = np.hstack([features_dc_reshaped, features_rest_reshaped])  # (110509, 48)
-df_combined = pd.DataFrame(combined_features)
-
-# 定义Excel表格的最大行数
-max_rows_per_sheet = 1048576
-
-# 将每列数据拆分为 (110509, 1) 大小的数据块
-with pd.ExcelWriter('features_dc_rest_splitted.xlsx') as writer:
-    for i in range(df_combined.shape[1]):
-        column_data = df_combined.iloc[:, i]
+# 遍历npz文件中的数组
+for array_name in npz_file.files:
+    array_data = npz_file[array_name]
+    
+    # 判断数组的维度并处理长度
+    if array_data.ndim == 0:  # 如果是标量
+        array_lengths[array_name] = 1  # 标量长度为1
+        df = pd.DataFrame([array_data], columns=[array_name])  # 将标量转换为单列的DataFrame
+    else:
+        # 保存数组的总长度
+        array_lengths[array_name] = array_data.shape[0]
         
-        # 检查列的行数，如果超过Excel限制则拆分
-        if len(column_data) > max_rows_per_sheet:
-            num_chunks = (len(column_data) // max_rows_per_sheet) + 1
-            for chunk_idx in range(num_chunks):
-                start_row = chunk_idx * max_rows_per_sheet
-                end_row = (chunk_idx + 1) * max_rows_per_sheet
-                chunk_data = column_data[start_row:end_row]
-                
-                # 写入到不同的sheet中
-                new_sheet_name = f"feature_{i+1}_part{chunk_idx+1}"
-                chunk_data.to_excel(writer, sheet_name=new_sheet_name, index=False)
-        else:
-            # 行数未超过限制，直接写入单个sheet
-            sheet_name = f"feature_{i+1}"
-            column_data.to_excel(writer, sheet_name=sheet_name, index=False)
+        # 对于一维及以上的数据，只保存1/100的内容
+        sample_size = max(1, array_data.shape[0] // 100)  # 保证至少保存1行
+        sampled_data = array_data[:sample_size]  # 提取前1/100的数据
+        
+        # 根据数据维度将其转换为DataFrame
+        if array_data.ndim == 1:  # 一维数组
+            df = pd.DataFrame(sampled_data, columns=[array_name])
+        elif array_data.ndim == 2:  # 二维数组
+            df = pd.DataFrame(sampled_data)
+        else:  # 多维数组展平处理
+            df = pd.DataFrame(sampled_data.reshape(-1, sampled_data.shape[-1]))
+    
+        # 将采样后的DataFrame写入Excel文件
+        df.to_excel(excel_writer, sheet_name=array_name, index=False)
 
-print("文件已成功转换为 Excel 格式，并拆分为多个表格")
+# 保存每个数组的长度信息到最后一个sheet
+lengths_df = pd.DataFrame(list(array_lengths.items()), columns=['Array Name', 'Length'])
+lengths_df.to_excel(excel_writer, sheet_name='Array_Lengths', index=False)
+
+# 关闭Excel writer对象，保存文件
+excel_writer.close()
+
+print("文件已成功保存为 '/home/kemove/output/drjohnson-1/point_cloud/iteration_35000/drjohnson-1.xlsx'")

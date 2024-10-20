@@ -20,7 +20,7 @@ from arguments import (
     PipelineParams,
     get_combined_args,
 )
-from compression.fsq import CompressionSettings, compress_gaussians
+from compression.fsq2 import CompressionSettings, compress_gaussians
 from gaussian_renderer import GaussianModel, render
 from lpipsPyTorch import lpips
 from scene import Scene
@@ -158,7 +158,8 @@ def run_fsq(
         torch.cuda.empty_cache()
 
         color_compression_settings = CompressionSettings(
-            levels=[7,5,5,5,5],
+            levels1=[5,5,5,5,5,5,5,5],
+            levels2=[10,10,10,10,10,10],
             importance_prune=comp_params.color_importance_prune,
             importance_include=comp_params.color_importance_include,
             steps=int(comp_params.color_cluster_iterations),
@@ -167,7 +168,8 @@ def run_fsq(
         )
 
         gaussian_compression_settings = CompressionSettings(
-            levels=[5,5,5,5,5,5],
+            levels1=[5,5,5,5,5,5,5,5],
+            levels2=[6,6,6,6,6,6],
             importance_prune=None,
             importance_include=comp_params.gaussian_importance_include,
             steps=int(comp_params.gaussian_cluster_iterations),
@@ -244,126 +246,6 @@ def run_fsq(
     print(metrics)
     with open(f"{comp_params.output_vq}/results.json","w") as f:
         json.dump({f"ours_{iteration}":metrics},f,indent=4)
-
-# def run_fsq(
-#     model_params: ModelParams,
-#     optim_params: OptimizationParams,
-#     pipeline_params: PipelineParams,
-#     comp_params: CompressionParams,
-# ):
-#     gaussians = GaussianModel(
-#         model_params.sh_degree, quantization=not optim_params.not_quantization_aware
-#     )
-#     scene = Scene(
-#         model_params, gaussians, load_iteration=comp_params.load_iteration, shuffle=True
-#     )
-
-#     if comp_params.start_checkpoint:
-#         (checkpoint_params, first_iter) = torch.load(comp_params.start_checkpoint)
-#         gaussians.restore(checkpoint_params, optim_params)
-
-#     timings = {}
-
-#     # %% Importance Calculation
-#     start_time = time.time()
-#     color_importance, gaussian_sensitivity = calc_importance(
-#         gaussians, scene, pipeline_params
-#     )
-#     end_time = time.time()
-#     timings["sensitivity_calculation"] = end_time - start_time
-
-#     # %% VQ Compression (移除 no_grad 确保启用梯度)
-#     print("vq compression..")
-#     start_time = time.time()
-
-#     color_importance_n = color_importance.amax(-1)
-#     gaussian_importance_n = gaussian_sensitivity.amax(-1)
-
-#     torch.cuda.empty_cache()
-
-#     color_compression_settings = CompressionSettings(
-#         levels=[7, 5, 5, 5, 5],
-#         importance_prune=comp_params.color_importance_prune,
-#         importance_include=comp_params.color_importance_include,
-#         steps=int(comp_params.color_cluster_iterations),
-#         decay=comp_params.color_decay,
-#         batch_size=comp_params.color_batch_size,
-#     )
-
-#     gaussian_compression_settings = CompressionSettings(
-#         levels=[7, 5, 5, 5, 5],
-#         importance_prune=None,
-#         importance_include=comp_params.gaussian_importance_include,
-#         steps=int(comp_params.gaussian_cluster_iterations),
-#         decay=comp_params.gaussian_decay,
-#         batch_size=comp_params.gaussian_batch_size,
-#     )
-
-#     # 执行 VQ 压缩，无需反向传播，因为所有参数都被冻结
-    
-#     compress_gaussians(
-#         gaussians,
-#         color_importance_n,
-#         gaussian_importance_n,
-#         color_compression_settings if not comp_params.not_compress_color else None,
-#         gaussian_compression_settings if not comp_params.not_compress_gaussians else None,
-#         comp_params.color_compress_non_dir,
-#         prune_threshold=comp_params.prune_threshold,
-#     )
-
-
-#     end_time = time.time()
-#     timings["clustering"] = end_time - start_time
-
-#     # 清理并确保缓存干净
-#     gc.collect()
-#     torch.cuda.empty_cache()
-
-#     # 保存模型等
-#     os.makedirs(comp_params.output_vq, exist_ok=True)
-
-#     copyfile(
-#         path.join(model_params.model_path, "cfg_args"),
-#         path.join(comp_params.output_vq, "cfg_args"),
-#     )
-#     model_params.model_path = comp_params.output_vq
-
-#     with open(
-#         os.path.join(comp_params.output_vq, "cfg_args_comp"), "w"
-#     ) as cfg_log_f:
-#         cfg_log_f.write(str(Namespace(**vars(comp_params))))
-
-#     iteration = scene.loaded_iter + comp_params.finetune_iterations
-
-#     # 跳过 Fine-tuning，因为参数都被冻结，不需要更新
-#     if comp_params.finetune_iterations > 0:
-#         print("Skipping fine-tuning, as all parameters are frozen.")
-
-#     # 保存点云
-#     out_file = path.join(
-#         comp_params.output_vq,
-#         f"point_cloud/iteration_{iteration}/point_cloud.npz",
-#     )
-#     start_time = time.time()
-#     gaussians.save_npz(out_file, sort_morton=not comp_params.not_sort_morton)
-#     end_time = time.time()
-#     timings["encode"] = end_time - start_time
-#     timings["total"] = sum(timings.values())
-
-#     with open(f"{comp_params.output_vq}/times.json", "w") as f:
-#         json.dump(timings, f)
-
-#     file_size = os.path.getsize(out_file) / 1024**2
-#     print(f"saved vq model to {out_file}")
-
-#     # 评估模型
-#     print("evaluating...")
-#     metrics = render_and_eval(gaussians, scene, model_params, pipeline_params)
-#     metrics["size"] = file_size
-#     print(metrics)
-
-#     with open(f"{comp_params.output_vq}/results.json", "w") as f:
-#         json.dump({f"ours_{iteration}": metrics}, f, indent=4)
 
 if __name__ == "__main__":
     parser = ArgumentParser(description="Compression script parameters")
