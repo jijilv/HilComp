@@ -1,7 +1,7 @@
 import numpy as np
 
 # 加载npz文件
-npz_file = np.load("/home/kemove/output/drjohnson-fsq/point_cloud/iteration_30000/point_cloud.npz")
+npz_file = np.load("/home/kemove/output/drjohnson-gvq/point_cloud/iteration_30000/point_cloud.npz")
 
 # 创建一个字典来存储每个数组的长度、维度和大小
 array_info = {}
@@ -33,7 +33,7 @@ total_size_MB = total_size / (1024**2)
 sorted_array_info = sorted(array_info.items(), key=lambda x: x[1]['size_bytes'], reverse=True)
 
 # 将数组的长度、维度和大小信息按大小顺序保存到一个txt文件
-with open('/home/kemove/github/c3dgs/size/drjohnson-fsq5u-array_info.txt', 'w') as f:
+with open('/home/kemove/github/c3dgs/size/drjohnson-gvq-array_info.txt', 'w') as f:
     for array_name, info in sorted_array_info:
         size_bytes = info['size_bytes']
         if size_bytes >= 1024**2:

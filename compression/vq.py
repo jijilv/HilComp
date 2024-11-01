@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 import math
 import time
+import numpy as np
 import torch
 from torch import nn
 from torch_scatter import scatter
@@ -110,10 +111,75 @@ def vq_features(
 
     start = time.time()
     _, vq_indices = vq_model(features)
+
+    print_vq_indices_distribution(vq_indices,codebook_size)
+
     torch.cuda.synchronize(device=vq_indices.device)
     end = time.time()
     print(f"calculating indices took {end-start} seconds ")
     return vq_model.codebook.data.detach(), vq_indices.detach()
+
+def print_vq_indices_distribution(fsq_indices, codebook_size):
+    """
+    打印 fsq_indices 的分布信息，包括每个索引的出现次数和码本利用率。
+    
+    参数：
+    - fsq_indices: 输入的张量
+    - codebook_size: 码本的大小
+    """
+    # 如果 fsq_indices 是 PyTorch 张量，将其转换为 NumPy 数组
+    if isinstance(fsq_indices, torch.Tensor):
+        fsq_indices = fsq_indices.cpu().numpy()
+
+    # 将 fsq_indices 扁平化以计算总体分布
+    fsq_indices_flat = fsq_indices.flatten()
+
+    # 生成从 0 到 codebook_size - 1 的完整索引范围
+    full_range = np.arange(0, codebook_size)
+
+    # 计算唯一值的分布
+    unique, counts = np.unique(fsq_indices_flat, return_counts=True)
+
+    # 创建包含完整范围的字典以存储索引出现次数
+    index_count_dict = {index: 0 for index in full_range}
+
+    # 更新字典中的出现次数
+    for u, c in zip(unique, counts):
+        index_count_dict[u] = c
+
+    # 打印每个索引的出现次数
+    # print("FSQ Indices 分布 (从 Index 0 开始):")
+    # for index in full_range:
+    #     count = index_count_dict.get(index, 0)
+    #     print(f"Index {index}: {count} 次")
+
+    # 计算码本利用率
+    utilized_codebook = len([index for index in index_count_dict if index_count_dict[index] > 0])
+    utilization_rate = (utilized_codebook / codebook_size) * 100
+
+    # 打印码本利用率
+    print(f"\n码本利用率: {utilization_rate:.2f}%")
+
+    # 计算并打印索引超过使用 10 次的几率
+    exceeding_indices_10 = len([index for index in index_count_dict if index_count_dict[index] > 10])
+    exceeding_rate_10 = (exceeding_indices_10 / codebook_size) * 100
+    print(f"索引超过使用 10 次的几率: {exceeding_rate_10:.2f}%")
+
+    # 计算并打印索引超过使用 100 次的几率
+    exceeding_indices_100 = len([index for index in index_count_dict if index_count_dict[index] > 100])
+    exceeding_rate_100 = (exceeding_indices_100 / codebook_size) * 100
+    print(f"索引超过使用 100 次的几率: {exceeding_rate_100:.2f}%")
+
+    # 计算并打印索引超过使用 1000 次的几率
+    exceeding_indices_1000 = len([index for index in index_count_dict if index_count_dict[index] > 1000])
+    exceeding_rate_1000 = (exceeding_indices_1000 / codebook_size) * 100
+    print(f"索引超过使用 1000 次的几率: {exceeding_rate_1000:.2f}%")
+
+    # 计算并打印索引超过使用 10000 次的几率
+    exceeding_indices_10000 = len([index for index in index_count_dict if index_count_dict[index] > 10000])
+    exceeding_rate_10000 = (exceeding_indices_10000 / codebook_size) * 100
+    print(f"索引超过使用 10000 次的几率: {exceeding_rate_10000:.2f}%")
+
 
 
 def join_features(
@@ -189,6 +255,8 @@ def compress_color(
         all_features, keep_mask, color_codebook, color_vq_indices
     )
 
+    print(f"color码本的大小：{compressed_features.shape[0]}")
+
     gaussians.set_color_indexed(compressed_features.reshape(-1, n_sh_coefs, 3), indices)
 
 def compress_covariance(
@@ -228,6 +296,8 @@ def compress_covariance(
         cov_vq_indices,
     )
 
+    print(f"cov码本的大小：{compressed_cov.shape[0]}")
+
     rot_vq, scale_vq = extract_rot_scale(to_full_cov(compressed_cov))
 
     gaussians.set_gaussian_indexed(
@@ -248,11 +318,19 @@ def compress_gaussians(
 ):
     with torch.no_grad():
         if prune_threshold >= 0:
+
+            percentile = 0.6
+            prune_threshold = torch.quantile(color_importance, percentile)
+            prune_threshold_gaussian = torch.quantile(gaussian_importance, 0)
+
             non_prune_mask = color_importance > prune_threshold
+
             print(f"prune: {(1-non_prune_mask.float().mean())*100:.2f}%")
             gaussians.mask_splats(non_prune_mask)
             gaussian_importance = gaussian_importance[non_prune_mask]
             color_importance = color_importance[non_prune_mask]
+
+            print(f"最后高斯球的个数：{color_importance.shape[0]}")
         
         if color_comp is not None:
             compress_color(
@@ -268,3 +346,109 @@ def compress_gaussians(
                 gaussian_comp,
             )
 
+
+def compress_gaussians2(
+    gaussians: GaussianModel,
+    color_importance: torch.Tensor,
+    gaussian_importance: torch.Tensor,
+    opacity_importance: torch.Tensor,
+    dc_contribution: torch.Tensor,
+    sh_contribution: torch.Tensor,
+    color_comp: Optional[CompressionSettings],
+    gaussian_comp: Optional[CompressionSettings],
+    color_compress_non_dir: bool,
+    prune_threshold:float=0.,
+):
+    with torch.no_grad():
+        if prune_threshold >= 0:
+
+            percentile = 0.5
+            prune_threshold_color = torch.quantile(color_importance, 0)
+            prune_threshold_dc = torch.quantile(dc_contribution, 0)
+            prune_threshold_sh = torch.quantile(sh_contribution, 0.6)
+            prune_threshold_gaussian = torch.quantile(gaussian_importance, 0)
+            prune_threshold_opacity = torch.quantile(opacity_importance, 0)
+
+            # non_prune_mask = opacity_importance > prune_threshold3
+
+            non_prune_mask = (
+            (opacity_importance > prune_threshold_opacity) &
+            (dc_contribution > prune_threshold_dc) &
+            (gaussian_importance > prune_threshold_gaussian)&
+            (sh_contribution > prune_threshold_sh) &
+            (color_importance > prune_threshold_color) 
+        )
+
+            print(f"prune: {(1-non_prune_mask.float().mean())*100:.2f}%")
+            gaussians.mask_splats(non_prune_mask)
+            gaussian_importance = gaussian_importance[non_prune_mask]
+            color_importance = color_importance[non_prune_mask]
+    # with torch.no_grad():
+    #     with torch.no_grad():
+    #         if prune_threshold >= 0:
+    #             # 设置目标比例
+    #             percentile_dc = 0.28  # 第一次筛选的目标比例
+    #             final_percentile = 0.6  # 最终剩余的 gaussians 比例
+
+    #             # 计算第一个阈值并应用初次筛选
+    #             prune_threshold_dc = torch.quantile(dc_contribution, percentile_dc)
+    #             initial_mask = dc_contribution > prune_threshold_dc
+    #             gaussians.mask_splats(initial_mask)
+
+    #             # 使用初次筛选的掩码更新相关张量
+    #             dc_contribution = dc_contribution[initial_mask]
+    #             sh_contribution = sh_contribution[initial_mask]
+    #             gaussian_importance = gaussian_importance[initial_mask]
+    #             color_importance = color_importance[initial_mask]
+    #             opacity_importance = opacity_importance[initial_mask]
+
+    #             # 确保 `gaussians` 更新后再生成下一次的掩码
+    #             remaining_gaussians = initial_mask.sum().item()
+    #             target_gaussians = int(final_percentile * remaining_gaussians)
+    #             sh_percentile = (remaining_gaussians - target_gaussians) / remaining_gaussians
+
+    #             # 计算第二次筛选的掩码并应用
+    #             prune_threshold_sh = torch.quantile(sh_contribution, sh_percentile)
+    #             intermediate_mask = sh_contribution > prune_threshold_sh
+    #             gaussians.mask_splats(intermediate_mask)
+
+    #             # 更新形状，以确保掩码和 `gaussians` 同步
+    #             dc_contribution = dc_contribution[intermediate_mask]
+    #             sh_contribution = sh_contribution[intermediate_mask]
+    #             gaussian_importance = gaussian_importance[intermediate_mask]
+    #             color_importance = color_importance[intermediate_mask]
+    #             opacity_importance = opacity_importance[intermediate_mask]
+
+    #             # 获取更新后的张量长度
+    #             current_length = len(dc_contribution)
+                
+    #             # 计算最终筛选掩码，以确保剩余的 gaussians 达到最终目标比例
+    #             final_target_gaussians = int(final_percentile * current_length)
+                
+    #             # 防止溢出，确保 final_target_gaussians 不超过当前张量数量
+    #             final_mask = torch.zeros(current_length, dtype=torch.bool)
+    #             final_mask[:final_target_gaussians] = True
+    #             gaussians.mask_splats(final_mask)
+
+    #             # 最终的 gaussians 筛选
+    #             gaussian_importance = gaussian_importance[final_mask]
+    #             color_importance = color_importance[final_mask]
+
+    #             print(f"第一次筛选（dc_contribution）的筛除率: {(1 - initial_mask.float().mean()) * 100:.2f}%")
+    #             print(f"中间筛选（sh_contribution）的筛除率: {(1 - intermediate_mask.float().mean()) * 100:.2f}%")
+    #             print(f"最终剩余 gaussians 占比: {final_percentile * 100:.2f}%")
+
+        
+        if color_comp is not None:
+            compress_color(
+                gaussians,
+                color_importance,
+                color_comp,
+                color_compress_non_dir,
+            )
+        if gaussian_comp is not None:
+            compress_covariance(
+                gaussians,
+                gaussian_importance,
+                gaussian_comp,
+            )

@@ -20,13 +20,13 @@ from arguments import (
     PipelineParams,
     get_combined_args,
 )
-from compression.vq import CompressionSettings, compress_gaussians, compress_gaussians2
+from compression.hi import CompressionSettings, compress_gaussians
 from gaussian_renderer import GaussianModel, render
 from lpipsPyTorch import lpips
 from scene import Scene
 from finetune import finetune
 from utils.image_utils import psnr
-from utils.loss_utils import l1_loss, ssim
+from utils.loss_utils import ssim
 
 
 def unique_output_folder():
@@ -53,14 +53,10 @@ def calc_importance(
     h1 = gaussians._features_dc.register_hook(lambda grad: grad.abs())
     h2 = gaussians._features_rest.register_hook(lambda grad: grad.abs())
     h3 = cov3d.register_hook(lambda grad: grad.abs())
-
     background = torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32, device="cuda")
 
     gaussians._features_dc.grad = None
     gaussians._features_rest.grad = None
-
-    gaussians._opacity.grad = None
-
     num_pixels = 0
     for camera in tqdm(scene.getTrainCameras(), desc="Calculating sensitivity"):
         cov3d_scaled = cov3d * scaling_factor.square()
@@ -73,11 +69,6 @@ def calc_importance(
             cov3d=cov3d_scaled,
         )["render"]
         loss = rendering.sum()
-
-        # gt_image = camera.original_image.cuda()
-        # loss = torch.abs(gt_image.sum()-rendering.sum())
-        # loss = gt_image.sum()-rendering.sum()
-
         loss.backward()
         num_pixels += rendering.shape[1]*rendering.shape[2]
 
@@ -95,83 +86,8 @@ def calc_importance(
     h1.remove()
     h2.remove()
     h3.remove()
-
     torch.cuda.empty_cache()
     return importance.detach(), cov_grad.detach()
-
-def calc_importance2(
-    gaussians: GaussianModel, scene, pipeline_params
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    scaling = gaussians.scaling_qa(
-        gaussians.scaling_activation(gaussians._scaling.detach())
-    )
-    cov3d = gaussians.covariance_activation(
-        scaling, 1.0, gaussians.get_rotation.detach(), True
-    ).requires_grad_(True)
-    scaling_factor = gaussians.scaling_factor_activation(
-        gaussians.scaling_factor_qa(gaussians._scaling_factor.detach())
-    )
-
-    h1 = gaussians._features_dc.register_hook(lambda grad: grad.abs())
-    h2 = gaussians._features_rest.register_hook(lambda grad: grad.abs())
-    h3 = cov3d.register_hook(lambda grad: grad.abs())
-    h4 = gaussians._opacity.register_hook(lambda grad: grad.abs())
-    background = torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32, device="cuda")
-
-    gaussians._features_dc.grad = None
-    gaussians._features_rest.grad = None
-
-    gaussians._opacity.grad = None
-
-    num_pixels = 0
-    for camera in tqdm(scene.getTrainCameras(), desc="Calculating sensitivity"):
-        cov3d_scaled = cov3d * scaling_factor.square()
-        rendering = render(
-            camera,
-            gaussians,
-            pipeline_params,
-            background,
-            clamp_color=False,
-            cov3d=cov3d_scaled,
-        )["render"]
-        loss = rendering.sum()
-
-        gt_image = camera.original_image.cuda()
-        # Ll1 = l1_loss(rendering, rendering)
-        # loss = (1.0 - 0.2) * Ll1 + 0.2 * (1.0 - ssim(rendering, gt_image))
-        # loss = torch.abs((rendering - gt_image)).sum()
-        loss = torch.abs(gt_image.sum()-rendering.sum())
-        loss.backward()
-
-        # loss.backward()
-        num_pixels += rendering.shape[1]*rendering.shape[2]
-
-    # importance = torch.cat(
-    #     [gaussians._features_dc.grad, gaussians._features_rest.grad],
-    #     1,
-    # ).flatten(-2)/num_pixels
-
-    dc_importance = torch.cat(
-        [gaussians._features_dc.grad],
-        1,
-    ).flatten(-2)/num_pixels
-
-    sh_importance = torch.cat(
-        [gaussians._features_rest.grad],
-        1,
-    ).flatten(-2)/num_pixels
-
-    opacity_contribution = gaussians._opacity.grad / num_pixels
-    opacity_contribution = opacity_contribution.squeeze(1)
-
-
-    cov_grad = cov3d.grad/num_pixels
-    h1.remove()
-    h2.remove()
-    h3.remove()
-    h4.remove()
-    torch.cuda.empty_cache()
-    return dc_importance.detach(), sh_importance.detach(), cov_grad.detach(), opacity_contribution.detach()
 
 
 def render_and_eval(
@@ -209,7 +125,7 @@ def render_and_eval(
         }
 
 
-def run_vq(
+def run_hi(
     model_params: ModelParams,
     optim_params: OptimizationParams,
     pipeline_params: PipelineParams,
@@ -235,11 +151,6 @@ def run_vq(
     color_importance, gaussian_sensitivity = calc_importance(
         gaussians, scene, pipeline_params
     )
-
-    # dc_contribution, sh_contribution, gaussian_contribution, opacity_contribution = calc_importance2(
-    #     gaussians, scene, pipeline_params
-    # )
-
     end_time = time.time()
     timings["sensitivity_calculation"] = end_time-start_time
     # %%
@@ -247,15 +158,9 @@ def run_vq(
     with torch.no_grad():
         start_time = time.time()
         color_importance_n = color_importance.amax(-1)
-        # color_importance_n = color_importance.mean(dim=-1)
-
         gaussian_importance_n = gaussian_sensitivity.amax(-1)
 
         print(f"初始高斯球的个数：{color_importance_n.shape[0]}")
-
-        # dc_contribution_n = dc_contribution.amax(-1)
-        # sh_contribution_n = sh_contribution.amax(-1)
-        # gaussian_contribution_n = gaussian_contribution.amax(-1)
 
         torch.cuda.empty_cache()
 
@@ -289,20 +194,7 @@ def run_vq(
             prune_threshold=comp_params.prune_threshold,
         )
 
-        # compress_gaussians2(
-        #     gaussians,
-        #     color_importance_n,
-        #     gaussian_contribution_n,
-        #     opacity_contribution,
-        #     dc_contribution_n,
-        #     sh_contribution_n,
-        #     color_compression_settings if not comp_params.not_compress_color else None,
-        #     gaussian_compression_settings
-        #     if not comp_params.not_compress_gaussians
-        #     else None,
-        #     comp_params.color_compress_non_dir,
-        #     prune_threshold=comp_params.prune_threshold,
-        # )
+        
         end_time = time.time()
         timings["clustering"]=end_time-start_time
 
@@ -383,4 +275,4 @@ if __name__ == "__main__":
     pipeline_params = pipeline.extract(args)
     comp_params = comp.extract(args)
 
-    run_vq(model_params, optim_params, pipeline_params, comp_params)
+    run_hi(model_params, optim_params, pipeline_params, comp_params)

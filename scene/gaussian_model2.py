@@ -11,6 +11,7 @@
 
 import torch
 import numpy as np
+from utils.encode_utils import *
 from utils.general_utils import inverse_sigmoid, get_expon_lr_func
 from torch import nn
 import os
@@ -18,7 +19,7 @@ from utils.system_utils import mkdir_p
 from plyfile import PlyData, PlyElement
 from utils.general_utils import strip_symmetric, build_scaling_rotation
 from enum import Enum
-from utils.entropy_model import DiscreteUnconditionalEntropyModel, Softmax
+from utils.entropy_model2 import DiscreteUnconditionalEntropyModel, Softmax
 
 
 class ColorMode(Enum):
@@ -75,6 +76,15 @@ class GaussianModel:
 
         self.quantization = quantization
         self.color_index_mode = ColorMode.NOT_INDEXED
+
+        # Initialize codebooks, logits, and indices for color and gaussian
+        self.color_codebook = torch.empty(0)
+        self.color_logits = torch.empty(0)
+        self.color_indices = None
+
+        self.cov_codebook = torch.empty(0)
+        self.cov_logits = torch.empty(0)
+        self.cov_indices = None
 
         self.features_dc_qa = torch.ao.quantization.FakeQuantize(dtype=torch.qint8).cuda()
         self.features_dc_qa = torch.ao.quantization.FakeQuantize(dtype=torch.qint8).cuda()
@@ -240,7 +250,6 @@ class GaussianModel:
             {
                 "params": [self._features_rest],
                 "lr": training_args.feature_lr / 20.0,
-                # "lr": training_args.feature_lr/5.0,
                 "name": "f_rest",
             },
             {
@@ -441,7 +450,143 @@ class GaussianModel:
 
         self.active_sh_degree = self.max_sh_degree
 
-    def save_npz(
+    # def save_npz(
+    #     self,
+    #     path,
+    #     compress: bool = True,
+    #     half_precision: bool = False,
+    #     sort_morton=False,
+    # ):
+    #     with torch.no_grad():
+    #         if sort_morton:
+    #             self._sort_morton()
+    #         if isinstance(path, str):
+    #             mkdir_p(os.path.dirname(os.path.abspath(path)))
+
+    #         dtype = torch.half if half_precision else torch.float32
+
+    #         save_dict = dict()
+
+    #         save_dict["quantization"] = self.quantization
+
+    #         # save position
+    #         if self.quantization:
+    #             save_dict["xyz"] = self.get_xyz.detach().half().cpu().numpy()
+    #         else:
+    #             save_dict["xyz"] = self._xyz.detach().cpu().numpy()
+
+    #         # save color features
+    #         if self.quantization:
+    #             features_dc_q = torch.quantize_per_tensor(
+    #                 self._features_dc.detach(),
+    #                 self.features_dc_qa.scale,
+    #                 self.features_dc_qa.zero_point,
+    #                 self.features_dc_qa.dtype,
+    #             ).int_repr()
+    #             save_dict["features_dc"] = features_dc_q.cpu().numpy()
+    #             save_dict["features_dc_scale"] = self.features_dc_qa.scale.cpu().numpy()
+    #             save_dict[
+    #                 "features_dc_zero_point"
+    #             ] = self.features_dc_qa.zero_point.cpu().numpy()
+
+    #             features_rest_q = torch.quantize_per_tensor(
+    #                 self._features_rest.detach(),
+    #                 self.features_rest_qa.scale,
+    #                 self.features_rest_qa.zero_point,
+    #                 self.features_rest_qa.dtype,
+    #             ).int_repr()
+    #             save_dict["features_rest"] = features_rest_q.cpu().numpy()
+    #             save_dict["features_rest_scale"] = self.features_rest_qa.scale.cpu().numpy()
+    #             save_dict[
+    #                 "features_rest_zero_point"
+    #             ] = self.features_rest_qa.zero_point.cpu().numpy()
+    #         else:
+    #             save_dict["features_dc"] = self._features_dc.detach().cpu().numpy()
+    #             save_dict["features_rest"] = self._features_rest.detach().cpu().numpy()
+
+    #         # save opacity
+    #         if self.quantization:
+    #             opacity = self.opacity_activation(self._opacity).detach()
+    #             opacity_q = torch.quantize_per_tensor(
+    #                 opacity,
+    #                 scale=self.opacity_qa.scale,
+    #                 zero_point=self.opacity_qa.zero_point,
+    #                 dtype=self.opacity_qa.dtype,
+    #             ).int_repr()
+    #             save_dict["opacity"] = opacity_q.cpu().numpy()
+    #             save_dict["opacity_scale"] = self.opacity_qa.scale.cpu().numpy()
+    #             save_dict[
+    #                 "opacity_zero_point"
+    #             ] = self.opacity_qa.zero_point.cpu().numpy()
+    #         else:
+    #             save_dict["opacity"] = self._opacity.detach().to(dtype).cpu().numpy()
+
+    #         # save indices
+    #         if self.is_color_indexed:
+    #             save_dict["feature_indices"] = (
+    #                 self._feature_indices.detach().contiguous().cpu().int().numpy()
+    #             )
+    #         if self.is_gaussian_indexed:
+    #             save_dict["gaussian_indices"] = (
+    #                 self._gaussian_indices.detach().contiguous().cpu().int().numpy()
+    #             )
+
+    #         # save scaling
+    #         if self.quantization:
+    #             scaling = self.scaling_activation(self._scaling.detach())
+    #             scaling_q = torch.quantize_per_tensor(
+    #                 scaling,
+    #                 scale=self.scaling_qa.scale,
+    #                 zero_point=self.scaling_qa.zero_point,
+    #                 dtype=self.scaling_qa.dtype,
+    #             ).int_repr()
+    #             save_dict["scaling"] = scaling_q.cpu().numpy()
+    #             save_dict["scaling_scale"] = self.scaling_qa.scale.cpu().numpy()
+    #             save_dict[
+    #                 "scaling_zero_point"
+    #             ] = self.scaling_qa.zero_point.cpu().numpy()
+
+    #             scaling_factor = self._scaling_factor.detach()
+    #             scaling_factor_q = torch.quantize_per_tensor(
+    #                 scaling_factor,
+    #                 scale=self.scaling_factor_qa.scale,
+    #                 zero_point=self.scaling_factor_qa.zero_point,
+    #                 dtype=self.scaling_factor_qa.dtype,
+    #             ).int_repr()
+    #             save_dict["scaling_factor"] = scaling_factor_q.cpu().numpy()
+    #             save_dict[
+    #                 "scaling_factor_scale"
+    #             ] = self.scaling_factor_qa.scale.cpu().numpy()
+    #             save_dict[
+    #                 "scaling_factor_zero_point"
+    #             ] = self.scaling_factor_qa.zero_point.cpu().numpy()
+    #         else:
+    #             save_dict["scaling"] = self._scaling.detach().to(dtype).cpu().numpy()
+    #             save_dict["scaling_factor"] = (
+    #                 self._scaling_factor.detach().to(dtype).cpu().numpy()
+    #             )
+
+    #         # save rotation
+    #         if self.quantization:
+    #             rotation = self.rotation_activation(self._rotation).detach()
+    #             rotation_q = torch.quantize_per_tensor(
+    #                 rotation,
+    #                 scale=self.rotation_qa.scale,
+    #                 zero_point=self.rotation_qa.zero_point,
+    #                 dtype=self.rotation_qa.dtype,
+    #             ).int_repr()
+    #             save_dict["rotation"] = rotation_q.cpu().numpy()
+    #             save_dict["rotation_scale"] = self.rotation_qa.scale.cpu().numpy()
+    #             save_dict[
+    #                 "rotation_zero_point"
+    #             ] = self.rotation_qa.zero_point.cpu().numpy()
+    #         else:
+    #             save_dict["rotation"] = self._rotation.detach().to(dtype).cpu().numpy()
+
+    #         save_fn = np.savez_compressed if compress else np.savez
+    #         save_fn(path, **save_dict)
+
+    def save_bitstream(
         self,
         path,
         compress: bool = True,
@@ -449,53 +594,66 @@ class GaussianModel:
         sort_morton=False,
     ):
         with torch.no_grad():
+
+            index_strings = []
+            index_lengths = []
+
             if sort_morton:
                 self._sort_morton()
             if isinstance(path, str):
                 mkdir_p(os.path.dirname(os.path.abspath(path)))
 
-            dtype = torch.half if half_precision else torch.float32
-
             save_dict = dict()
-
             save_dict["quantization"] = self.quantization
 
-            # save position
+            # Save position
             if self.quantization:
                 save_dict["xyz"] = self.get_xyz.detach().half().cpu().numpy()
             else:
                 save_dict["xyz"] = self._xyz.detach().cpu().numpy()
 
-            # save color features
-            if self.quantization:
-                features_dc_q = torch.quantize_per_tensor(
-                    self._features_dc.detach(),
-                    self.features_dc_qa.scale,
-                    self.features_dc_qa.zero_point,
-                    self.features_dc_qa.dtype,
-                ).int_repr()
-                save_dict["features_dc"] = features_dc_q.cpu().numpy()
-                save_dict["features_dc_scale"] = self.features_dc_qa.scale.cpu().numpy()
-                save_dict[
-                    "features_dc_zero_point"
-                ] = self.features_dc_qa.zero_point.cpu().numpy()
+            # Save color codebook, logits, and indices
+            if self.color_codebook is not None:
+                save_dict["color_codebook"] = self.color_codebook.cpu().numpy()
+                save_dict["color_logits"] = self.color_logits.cpu().numpy()
 
-                features_rest_q = torch.quantize_per_tensor(
-                    self._features_rest.detach(),
-                    self.features_rest_qa.scale,
-                    self.features_rest_qa.zero_point,
-                    self.features_rest_qa.dtype,
-                ).int_repr()
-                save_dict["features_rest"] = features_rest_q.cpu().numpy()
-                save_dict["features_rest_scale"] = self.features_rest_qa.scale.cpu().numpy()
-                save_dict[
-                    "features_rest_zero_point"
-                ] = self.features_rest_qa.zero_point.cpu().numpy()
-            else:
-                save_dict["features_dc"] = self._features_dc.detach().cpu().numpy()
-                save_dict["features_rest"] = self._features_rest.detach().cpu().numpy()
+                # 使用 entropy_coding 进行压缩
+                bits_str, decompressed_indexes = entropy_coding(self.color_indices, self.color_logits)
 
-            # save opacity
+                decompressed_indexes = decompressed_indexes.to(self.color_indices.device)
+
+                # 添加检验语句：检查解压后的索引是否与原始索引相同
+                if torch.equal(self.color_indices, decompressed_indexes):
+                    print("压缩和解压后的索引匹配！")
+                else:
+                    raise ValueError("解压后的索引与原始索引不匹配！")
+
+                # 如果解压缩一致，则继续保存压缩后的结果
+                index_strings.append(bits_str)
+                index_lengths.append(len(bits_str))
+
+            # Save covariance codebook, logits, and indices
+            if self.cov_codebook is not None:
+                save_dict["cov_codebook"] = self.cov_codebook.cpu().numpy()
+                save_dict["cov_logits"] = self.cov_logits.cpu().numpy()
+
+                bits_str, decompressed_indexes = entropy_coding(self.cov_indices, self.cov_logits)
+                decompressed_indexes = decompressed_indexes.to(self.cov_indices.device)
+                # 添加检验语句：检查解压后的索引是否与原始索引相同
+                if torch.equal(self.cov_indices, decompressed_indexes):
+                    print("压缩和解压后的索引匹配！")
+                else:
+                    raise ValueError("解压后的索引与原始索引不匹配！")
+
+                # 如果解压缩一致，则继续保存压缩后的结果
+                index_strings.append(bits_str)
+                index_lengths.append(len(bits_str))
+
+            index_bitstream = pack_strings(index_strings)
+            with open(os.path.join(path, 'index_bitstream.bin'), "wb") as f:
+                f.write(index_bitstream)
+
+            # Save opacity
             if self.quantization:
                 opacity = self.opacity_activation(self._opacity).detach()
                 opacity_q = torch.quantize_per_tensor(
@@ -506,76 +664,14 @@ class GaussianModel:
                 ).int_repr()
                 save_dict["opacity"] = opacity_q.cpu().numpy()
                 save_dict["opacity_scale"] = self.opacity_qa.scale.cpu().numpy()
-                save_dict[
-                    "opacity_zero_point"
-                ] = self.opacity_qa.zero_point.cpu().numpy()
+                save_dict["opacity_zero_point"] = self.opacity_qa.zero_point.cpu().numpy()
             else:
-                save_dict["opacity"] = self._opacity.detach().to(dtype).cpu().numpy()
-
-            # save indices
-            if self.is_color_indexed:
-                save_dict["feature_indices"] = (
-                    self._feature_indices.detach().contiguous().cpu().int().numpy()
-                )
-            if self.is_gaussian_indexed:
-                save_dict["gaussian_indices"] = (
-                    self._gaussian_indices.detach().contiguous().cpu().int().numpy()
-                )
-
-            # save scaling
-            if self.quantization:
-                scaling = self.scaling_activation(self._scaling.detach())
-                scaling_q = torch.quantize_per_tensor(
-                    scaling,
-                    scale=self.scaling_qa.scale,
-                    zero_point=self.scaling_qa.zero_point,
-                    dtype=self.scaling_qa.dtype,
-                ).int_repr()
-                save_dict["scaling"] = scaling_q.cpu().numpy()
-                save_dict["scaling_scale"] = self.scaling_qa.scale.cpu().numpy()
-                save_dict[
-                    "scaling_zero_point"
-                ] = self.scaling_qa.zero_point.cpu().numpy()
-
-                scaling_factor = self._scaling_factor.detach()
-                scaling_factor_q = torch.quantize_per_tensor(
-                    scaling_factor,
-                    scale=self.scaling_factor_qa.scale,
-                    zero_point=self.scaling_factor_qa.zero_point,
-                    dtype=self.scaling_factor_qa.dtype,
-                ).int_repr()
-                save_dict["scaling_factor"] = scaling_factor_q.cpu().numpy()
-                save_dict[
-                    "scaling_factor_scale"
-                ] = self.scaling_factor_qa.scale.cpu().numpy()
-                save_dict[
-                    "scaling_factor_zero_point"
-                ] = self.scaling_factor_qa.zero_point.cpu().numpy()
-            else:
-                save_dict["scaling"] = self._scaling.detach().to(dtype).cpu().numpy()
-                save_dict["scaling_factor"] = (
-                    self._scaling_factor.detach().to(dtype).cpu().numpy()
-                )
-
-            # save rotation
-            if self.quantization:
-                rotation = self.rotation_activation(self._rotation).detach()
-                rotation_q = torch.quantize_per_tensor(
-                    rotation,
-                    scale=self.rotation_qa.scale,
-                    zero_point=self.rotation_qa.zero_point,
-                    dtype=self.rotation_qa.dtype,
-                ).int_repr()
-                save_dict["rotation"] = rotation_q.cpu().numpy()
-                save_dict["rotation_scale"] = self.rotation_qa.scale.cpu().numpy()
-                save_dict[
-                    "rotation_zero_point"
-                ] = self.rotation_qa.zero_point.cpu().numpy()
-            else:
-                save_dict["rotation"] = self._rotation.detach().to(dtype).cpu().numpy()
+                save_dict["opacity"] = self._opacity.detach().cpu().numpy()
 
             save_fn = np.savez_compressed if compress else np.savez
-            save_fn(path, **save_dict)
+            save_fn(os.path.join(path, 'point_cloud.npz'), **save_dict)
+
+
 
     def load_npz(self, path,override_quantization=False):
         state_dict = np.load(path)
@@ -797,18 +893,84 @@ class GaussianModel:
 
     # def set_color_codebook(self, features: torch.Tensor, indices: torch.Tensor, prob: torch.Tensor):
 
-    def set_color_indexed(self, features: torch.Tensor, indices: torch.Tensor):
-        self._feature_indices = nn.Parameter(indices, requires_grad=False)
-        self._features_dc = nn.Parameter(features[:, :1].detach(), requires_grad=True)
-        self._features_rest = nn.Parameter(features[:, 1:].detach(), requires_grad=True)
-        self.color_index_mode = ColorMode.ALL_INDEXED
 
-    def set_gaussian_indexed(
-        self, rotation: torch.Tensor, scaling: torch.Tensor, indices: torch.Tensor
-    ):
-        self._gaussian_indices = nn.Parameter(indices.detach(), requires_grad=False)
-        self._rotation = nn.Parameter(rotation.detach(), requires_grad=True)
-        self._scaling = nn.Parameter(scaling.detach(), requires_grad=True)
+    # def set_color_indexed(self, features: torch.Tensor, indices: torch.Tensor):
+    #     self._feature_indices = nn.Parameter(indices, requires_grad=False)
+    #     self._features_dc = nn.Parameter(features[:, :1].detach(), requires_grad=True)
+    #     self._features_rest = nn.Parameter(features[:, 1:].detach(), requires_grad=True)
+    #     self.color_index_mode = ColorMode.ALL_INDEXED
+
+    # def set_gaussian_indexed(
+    #     self, rotation: torch.Tensor, scaling: torch.Tensor, indices: torch.Tensor
+    # ):
+    #     self._gaussian_indices = nn.Parameter(indices.detach(), requires_grad=False)
+    #     self._rotation = nn.Parameter(rotation.detach(), requires_grad=True)
+    #     self._scaling = nn.Parameter(scaling.detach(), requires_grad=True)
+
+    def set_color(self, features: torch.Tensor, indices: torch.Tensor):
+        """
+        根据传入的索引重新排列_features_dc和_features_rest，并设置相应的参数。
+        """
+        # 提取索引对应的特征
+        features_dc = features[indices, :1]
+        features_rest = features[indices, 1:]
+
+        # 将提取的特征赋值到类属性
+        self._features_dc = nn.Parameter(features_dc.detach(), requires_grad=True)
+        self._features_rest = nn.Parameter(features_rest.detach(), requires_grad=True)
+
+    def set_cov(self, rotation: torch.Tensor, scaling: torch.Tensor, indices: torch.Tensor):
+        """
+        根据传入的索引重新排列_rotation和_scaling，并设置相应的参数。
+        """
+        # 提取索引对应的旋转和缩放
+        rotation_selected = rotation[indices]
+        scaling_selected = scaling[indices]
+
+        # 将提取的旋转和缩放赋值到类属性
+        self._rotation = nn.Parameter(rotation_selected.detach(), requires_grad=True)
+        self._scaling = nn.Parameter(scaling_selected.detach(), requires_grad=True)
+
+    def set_color_codebook(self, color_codebook: torch.Tensor, color_indices: torch.Tensor, color_prob: torch.Tensor):
+        """
+        Set the color codebook, indices, and probabilities for the Gaussian model.
+        
+        Args:
+            color_codebook (torch.Tensor): The color codebook tensor.
+            color_indices (torch.Tensor): The indices tensor for color features.
+            color_prob (torch.Tensor): The probabilities of the color indices.
+        """
+        self.color_codebook = color_codebook
+        self.color_indices = color_indices
+        self.color_logits = color_prob
+
+        # # Update _features_dc and _features_rest based on the indices and codebook
+        # features_dc = color_codebook[color_indices, :1]
+        # features_rest = color_codebook[color_indices, 1:]
+
+        # self._features_dc = nn.Parameter(features_dc, requires_grad=True)
+        # self._features_rest = nn.Parameter(features_rest, requires_grad=True)
+        # self.color_index_mode = ColorMode.ALL_INDEXED
+    
+    def set_cov_codebook(self, cov_codebook: torch.Tensor, cov_indices: torch.Tensor, cov_prob: torch.Tensor):
+        """
+        Set the covariance codebook, indices, and probabilities for the Gaussian model.
+        
+        Args:
+            cov_codebook (torch.Tensor): The covariance codebook tensor.
+            cov_indices (torch.Tensor): The indices tensor for covariance features.
+            cov_prob (torch.Tensor): The probabilities of the covariance indices.
+        """
+        self.cov_codebook = cov_codebook
+        self.cov_indices = cov_indices
+        self.cov_logits = cov_prob
+
+        # Update _scaling and _rotation based on the indices and codebook
+        # scaling = cov_codebook[cov_indices, :3]
+        # rotation = cov_codebook[cov_indices, 3:]
+
+        # self._scaling = nn.Parameter(scaling, requires_grad=True)
+        # self._rotation = nn.Parameter(rotation, requires_grad=True)
 
 
 class FakeQuantizationHalf(torch.autograd.Function):

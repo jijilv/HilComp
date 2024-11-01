@@ -3,11 +3,17 @@ import subprocess
 
 def main():
     # 设置要调用的脚本和参数
-    script_path = "/home/kemove/github/c3dgs/compressfsq2.py"
-    model_path = "/home/kemove/data/3dgs_models/drjohnson"
+    # script_path = "/home/kemove/github/c3dgs/compress.py"
+    # model_path = "/home/kemove/data/3dgs_models/bonsai"
+    # data_device = "cuda"
+    # output_vq = "/home/kemove/output/bonsai-vq/"
+    # source_path = "/home/kemove/data/360/bonsai"  # 这里设置你的 source_path
+
+    script_path = "/home/kemove/github/c3dgs/compresshi.py"
+    model_path = "/home/kemove/data/3dgs_models/bonsai"
     data_device = "cuda"
-    output_vq = "/home/kemove/output/drjohnson-fsq2/"
-    source_path = "/home/kemove/data/db/drjohnson"  # 这里设置你的 source_path
+    output_vq = "/home/kemove/output/bonsai-hi/"
+    source_path = "/home/kemove/data/360/bonsai"  # 这里设置你的 source_path
 
 
     # 准备命令
