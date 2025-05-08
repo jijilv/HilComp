@@ -1,4 +1,4 @@
-from os import path
+import os
 import torch
 from scene import GaussianModel
 from argparse import ArgumentParser
@@ -10,7 +10,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.ply_file is None:
-        file_path = path.splitext(args.npz_file)[0]
+        file_path = os.path.splitext(args.npz_file)[0]
         args.ply_file = f"{file_path}.ply"
 
     gaussians = GaussianModel(3)
@@ -19,3 +19,4 @@ if __name__ == "__main__":
     print(f"saving to '{args.ply_file}'")
     gaussians.save_ply(args.ply_file)
     print("done")
+    

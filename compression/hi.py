@@ -19,7 +19,6 @@ from hilbertcurve.hilbertcurve import HilbertCurve
 from einops import rearrange
 from tqdm import tqdm, trange
 
-from curvetest import hilbert_compress
 from scene.gaussian_model import GaussianModel
 from utils.splats import extract_rot_scale, to_full_cov
 
@@ -633,6 +632,203 @@ class Hilbert(Module):
                 self.codebook /= tr[:, None]
 
         return big_index
+    
+    def uniform_init_hi6(self, x: torch.Tensor, tmp: torch.Tensor, importance: torch.Tensor, scale_normalize: bool = False) -> torch.Tensor:
+        """
+        初始化码本，并将所有数据均匀地分配到不同的**大索引**中，使用两阶段的Hilbert曲线划分策略。
+        """
+        B, N = tmp.shape
+        total_bins = self.codebook_size
+        split_factor = 256
+        initial_bins = total_bins // split_factor  # 初始划分的块数调整为 total_bins // split_factor
+
+        # 设置希尔伯特曲线的阶数
+        p = 8  # 希尔伯特曲线的阶数，根据数据的分辨率需要调整
+        hilbert_curve = HilbertCurve(p, N)
+
+        print("Compressing Gaussian splats with Hilbert curve...")
+        start_time = time.time()
+
+        # 对数据进行归一化处理，使得所有数据点为非负整数
+        tmp_min = tmp.min()
+        tmp_max = tmp.max()
+        scaled_tmp = ((tmp - tmp_min) / (tmp_max - tmp_min) * (2**p - 1)).round().long()
+
+        # 计算每个数据点的初始Hilbert索引
+        hilbert_indices = []
+        for i in tqdm(range(B), desc="Calculating Hilbert indices"):
+            point = scaled_tmp[i].tolist()  # 将每个数据点转换为整数列表
+            hilbert_index = hilbert_curve.distance_from_point(point)
+            hilbert_indices.append(hilbert_index)
+
+        # 将 hilbert_indices 转换为张量并进行排序
+        hilbert_indices = torch.tensor(hilbert_indices, device=tmp.device)
+        sorted_indices = torch.argsort(hilbert_indices)
+
+        # 初始划分为 initial_bins 个块
+        initial_bin_size = B // initial_bins
+        initial_remainder = B % initial_bins
+        big_index = torch.zeros(B, dtype=torch.int64, device=tmp.device)
+
+        # 初步划分
+        current_start = 0
+        centers = []
+        for i in range(initial_bins):
+            current_end = current_start + initial_bin_size + (1 if i < initial_remainder else 0)
+            big_index[sorted_indices[current_start:current_end]] = i
+            center = x[sorted_indices[current_start:current_end]].mean(dim=0)  # 使用 x 计算中心点
+            centers.append(center)
+            current_start = current_end
+
+        # 计算每个数据点与前后中心点的距离比率，并在每个块内排序
+        centers = torch.stack(centers)
+        for i in range(initial_bins):
+            bin_mask = (big_index == i)
+            if bin_mask.sum() == 0:
+                continue  # 跳过空块
+            bin_indices = torch.where(bin_mask)[0]
+            
+            # 计算距离比率
+            if i > 0:
+                prev_center = centers[i - 1]
+                d_prev = torch.norm(x[bin_indices] - prev_center, dim=1)
+            else:
+                d_prev = torch.ones(bin_indices.size(0), device=tmp.device) * float('inf')
+            if i < initial_bins - 1:
+                next_center = centers[i + 1]
+                d_next = torch.norm(x[bin_indices] - next_center, dim=1)
+            else:
+                d_next = torch.ones(bin_indices.size(0), device=tmp.device) * float('inf')
+            distances = d_prev / d_next
+
+            # 对块内数据按距离比率排序
+            sorted_bin_indices = bin_indices[torch.argsort(distances)]
+            
+            # 在块内划分为等量的子块
+            bin_size = bin_indices.size(0) // split_factor
+            remainder = bin_indices.size(0) % split_factor
+            sub_index = 0
+            for j in range(split_factor):  # 使用 split_factor 进行划分
+                sub_bin_end = sub_index + bin_size + (1 if j < remainder else 0)
+                big_index[sorted_bin_indices[sub_index:sub_bin_end]] = i * split_factor + j
+                sub_index = sub_bin_end
+
+        end_time = time.time()
+        total_hilbert_time = end_time - start_time
+        print(f"Total compression time with Hilbert curve: {total_hilbert_time:.2f} seconds")
+
+        # 使用 weighted average 初始化码本
+        with torch.no_grad():
+            idx = big_index.long()
+            acc_importance = scatter(importance, idx, 0, reduce="sum", dim_size=self.codebook.shape[0])
+            codebook = scatter(x * importance[:, None], idx, 0, reduce="sum", dim_size=self.codebook.shape[0]) / (acc_importance[:, None] + self.eps)
+            self.codebook.data = codebook
+
+            # 迹归一化步骤
+            if scale_normalize:
+                tr = self.codebook[:, [0, 3, 5]].sum(-1)
+                self.codebook /= tr[:, None]
+
+        return big_index
+
+    def uniform_init_hi7(self, x: torch.Tensor, tmp: torch.Tensor, importance: torch.Tensor, scale_normalize: bool = False) -> torch.Tensor:
+        """
+        初始化码本，并将所有数据均匀地分配到不同的**大索引**中，使用两阶段的Hilbert曲线划分策略。
+        """
+        B, N = tmp.shape
+        total_bins = self.codebook_size
+        split_factor = 256
+        initial_bins = total_bins // split_factor  # 初始划分的块数调整为 total_bins // split_factor
+
+        # 设置希尔伯特曲线的阶数
+        p = 8  # 希尔伯特曲线的阶数，根据数据的分辨率需要调整
+        hilbert_curve = HilbertCurve(p, N)
+
+        print("Compressing Gaussian splats with Hilbert curve...")
+        start_time = time.time()
+
+        # 对数据进行归一化处理，使得所有数据点为非负整数
+        tmp_min = tmp.min()
+        tmp_max = tmp.max()
+        scaled_tmp = ((tmp - tmp_min) / (tmp_max - tmp_min) * (2**p - 1)).round().long()
+
+        # 计算每个数据点的初始Hilbert索引
+        hilbert_indices = []
+        for i in tqdm(range(B), desc="Calculating Hilbert indices"):
+            point = scaled_tmp[i].tolist()  # 将每个数据点转换为整数列表
+            hilbert_index = hilbert_curve.distance_from_point(point)
+            hilbert_indices.append(hilbert_index)
+
+        # 将 hilbert_indices 转换为张量并进行排序
+        hilbert_indices = torch.tensor(hilbert_indices, device=tmp.device)
+        sorted_indices = torch.argsort(hilbert_indices)
+
+        # 初始划分为 initial_bins 个块
+        initial_bin_size = B // initial_bins
+        initial_remainder = B % initial_bins
+        big_index = torch.zeros(B, dtype=torch.int64, device=tmp.device)
+
+        # 初步划分
+        current_start = 0
+        centers = []
+        for i in range(initial_bins):
+            current_end = current_start + initial_bin_size + (1 if i < initial_remainder else 0)
+            big_index[sorted_indices[current_start:current_end]] = i
+            center = tmp[sorted_indices[current_start:current_end]].mean(dim=0)  # 使用 tmp 计算中心点
+            centers.append(center)
+            current_start = current_end
+
+        # 计算每个数据点与前后中心点的距离比率，并在每个块内排序
+        centers = torch.stack(centers)
+        for i in range(initial_bins):
+            bin_mask = (big_index == i)
+            if bin_mask.sum() == 0:
+                continue  # 跳过空块
+            bin_indices = torch.where(bin_mask)[0]
+
+            # 计算距离比率
+            if i > 0:
+                prev_center = centers[i - 1]
+                d_prev = torch.norm(tmp[bin_indices] - prev_center, dim=1)
+            else:
+                d_prev = torch.ones(bin_indices.size(0), device=tmp.device) * float('inf')
+            if i < initial_bins - 1:
+                next_center = centers[i + 1]
+                d_next = torch.norm(tmp[bin_indices] - next_center, dim=1)
+            else:
+                d_next = torch.ones(bin_indices.size(0), device=tmp.device) * float('inf')
+            distances = d_prev / d_next
+
+            # 对块内数据按距离比率排序
+            sorted_bin_indices = bin_indices[torch.argsort(distances)]
+
+            # 在块内划分为等量的子块
+            bin_size = bin_indices.size(0) // split_factor
+            remainder = bin_indices.size(0) % split_factor
+            sub_index = 0
+            for j in range(split_factor):  # 使用 split_factor 进行划分
+                sub_bin_end = sub_index + bin_size + (1 if j < remainder else 0)
+                big_index[sorted_bin_indices[sub_index:sub_bin_end]] = i * split_factor + j
+                sub_index = sub_bin_end
+
+        end_time = time.time()
+        total_hilbert_time = end_time - start_time
+        print(f"Total compression time with Hilbert curve: {total_hilbert_time:.2f} seconds")
+
+        # 使用 weighted average 初始化码本
+        with torch.no_grad():
+            idx = big_index.long()
+            acc_importance = scatter(importance, idx, 0, reduce="sum", dim_size=self.codebook.shape[0])
+            codebook = scatter(x * importance[:, None], idx, 0, reduce="sum", dim_size=self.codebook.shape[0]) / (acc_importance[:, None] + self.eps)
+            self.codebook.data = codebook
+
+            # 迹归一化步骤
+            if scale_normalize:
+                tr = self.codebook[:, [0, 3, 5]].sum(-1)
+                self.codebook /= tr[:, None]
+
+        return big_index
+
 
     def update(self,idx: torch.Tensor, tmp: torch.Tensor, hi_modal: Hilbert, x: torch.Tensor, importance: torch.Tensor) -> torch.Tensor:
         with torch.no_grad():
@@ -686,6 +882,7 @@ def hi_features(
 
     bigindices = hi_modal.uniform_init_hi2(features,compressed_features,importance_n,scale_normalize)
 
+    # bigindices = hi_modal.uniform_init_hi7(features,compressed_features,importance_n,scale_normalize)
     # bigindices = hi_modal.uniform_init_hi3(features,compressed_features,scale_normalize)
     start_time = time.time()
 
@@ -723,8 +920,8 @@ def hi_features(
 
 def print_fsq_indices_distribution(fsq_indices, codebook_size):
     """
-    打印 fsq_indices 的分布信息，包括每个索引的出现次数和码本利用率。
-    
+    打印 fsq_indices 的分布信息，包括每个索引的出现次数、码本利用率和码本困惑度。
+
     参数：
     - fsq_indices: 输入的张量
     - codebook_size: 码本的大小
@@ -748,12 +945,6 @@ def print_fsq_indices_distribution(fsq_indices, codebook_size):
     # 更新字典中的出现次数
     for u, c in zip(unique, counts):
         index_count_dict[u] = c
-
-    # 打印每个索引的出现次数
-    # print("FSQ Indices 分布 (从 Index 0 开始):")
-    # for index in full_range:
-    #     count = index_count_dict.get(index, 0)
-    #     print(f"Index {index}: {count} 次")
 
     # 计算码本利用率
     utilized_codebook = len([index for index in index_count_dict if index_count_dict[index] > 0])
@@ -781,6 +972,20 @@ def print_fsq_indices_distribution(fsq_indices, codebook_size):
     exceeding_indices_10000 = len([index for index in index_count_dict if index_count_dict[index] > 10000])
     exceeding_rate_10000 = (exceeding_indices_10000 / codebook_size) * 100
     print(f"索引超过使用 10000 次的几率: {exceeding_rate_10000:.2f}%")
+
+    # 计算码本困惑度
+    total_count = len(fsq_indices_flat)  # 总使用次数
+    probabilities = np.array([index_count_dict[index] / total_count for index in full_range])
+    
+    # 过滤掉概率为0的索引
+    probabilities = probabilities[probabilities > 0]
+
+    # 计算困惑度
+    entropy = -np.sum(probabilities * np.log(probabilities))
+    perplexity = np.exp(entropy)  # 困惑度 = exp(熵)
+    
+    # 打印码本困惑度
+    print(f"码本困惑度: {perplexity:.2f}")
 
 def join_features(
     all_features: torch.Tensor,
@@ -825,7 +1030,8 @@ def compress_color(
 ):
     # keep_mask = color_importance > color_comp.importance_include
 
-    top_k_indices = torch.argsort(color_importance, descending=True)[:10000]
+    top_k_indices = torch.argsort(color_importance, descending=True)[:2**13]
+    # top_k_indices = torch.argsort(color_importance, descending=True)[:0]
 
     # 创建一个与 color_importance 相同形状的布尔 mask
     keep_mask = torch.zeros_like(color_importance, dtype=torch.bool)
@@ -889,7 +1095,8 @@ def compress_covariance(
     # keep_mask_g = gaussian_importance > gaussian_comp.importance_include
 
     # 对 gaussian_importance 进行排序并获取前 20000 个索引
-    top_k_indices_g = torch.argsort(gaussian_importance, descending=True)[:20000]
+    top_k_indices_g = torch.argsort(gaussian_importance, descending=True)[:2**14]
+    # top_k_indices_g = torch.argsort(gaussian_importance, descending=True)[:0]
 
     # 创建一个与 gaussian_importance 相同形状的布尔 mask
     keep_mask_g = torch.zeros_like(gaussian_importance, dtype=torch.bool)
@@ -960,7 +1167,7 @@ def compress_gaussians(
     with torch.no_grad():
         if prune_threshold >= 0:
 
-            percentile = 0.65
+            percentile = 0.5
             prune_threshold = torch.quantile(color_importance, percentile)
 
             non_prune_mask = color_importance > prune_threshold
@@ -985,3 +1192,96 @@ def compress_gaussians(
                 gaussian_comp,
             )
 
+def plot_importance_distribution(importance):
+    """
+    绘制 color_importance 的分布图。
+
+    参数:
+    - color_importance: numpy 数组或列表，表示颜色重要性的累积贡献
+    """
+    # 假设 color_importance 是一个累积贡献的数据，长度为 100
+    x = np.linspace(0, 100, len(importance))  # x 轴表示高斯分布的百分比
+
+    # 绘制图表
+    plt.figure(figsize=(8, 5))
+    plt.plot(x, importance, label="颜色重要性")
+    plt.xlabel("高斯分布的百分比")
+    plt.ylabel("重要性的百分比贡献")
+    plt.title("颜色重要性分布")
+    plt.legend()
+    plt.show()
+
+def compress_gaussians2(
+    gaussians: GaussianModel,
+    color_contribution: torch.Tensor,
+    dc_contribution: torch.Tensor,
+    sh_contribution: torch.Tensor,
+    cov_contribution: torch.Tensor,
+    opacity_contribution: torch.Tensor,
+    color_comp: Optional[CompressionSettings],
+    gaussian_comp: Optional[CompressionSettings],
+    color_compress_non_dir: bool,
+    prune_threshold:float=0.,
+):
+    
+    color_importance = color_contribution.amax(-1)
+    gaussian_importance = cov_contribution.amax(-1)
+
+    # plot_importance_distribution(color_importance)
+
+    color_contribution_n = color_contribution.amax(-1)
+    dc_contribution_n = dc_contribution.amax(-1)
+    sh_contribution_n = sh_contribution.amax(-1)
+    cov_contribution_n = cov_contribution.amax(-1)
+    opacity_contribution_n = opacity_contribution
+    color2_contribution_n = dc_contribution_n*0.5+sh_contribution_n*0.5
+
+    with torch.no_grad():
+        if prune_threshold >= 0:
+
+            percentile = 0.5
+            prune_threshold_color = torch.quantile(color_contribution_n, 0.65)
+            prune_threshold_dc = torch.quantile(dc_contribution_n, 0.6)
+            prune_threshold_sh = torch.quantile(sh_contribution_n, 0.6)
+            prune_threshold_cov = torch.quantile(cov_contribution_n, 0.6)
+            prune_threshold_opacity = torch.quantile(opacity_contribution_n, 0.6)
+            prune_threshold_color2 = torch.quantile(color2_contribution_n, 0.99)
+
+            # non_prune_mask = color_contribution_n > prune_threshold_color
+            # non_prune_mask = dc_contribution_n > prune_threshold_dc
+            # non_prune_mask = sh_contribution_n > prune_threshold_sh
+            # non_prune_mask = cov_contribution_n > prune_threshold_cov
+            # non_prune_mask = opacity_contribution_n > prune_threshold_opacity
+            non_prune_mask = color2_contribution_n > prune_threshold_color2 
+            # non_prune_mask = ((color_contribution_n > prune_threshold_color) & (opacity_contribution_n > 0.0))
+
+        #     non_prune_mask = (
+        #     (opacity_contribution_n > 0) &
+        #     (dc_contribution_n > 0) &
+        #     (cov_contribution_n > 0)&
+        #     (sh_contribution_n > 0) &
+        #     (color_contribution_n > 0) &
+        #     (color2_contribution_n > prune_threshold_color2)
+        # )
+
+            print(f"prune: {(1-non_prune_mask.float().mean())*100:.2f}%")
+            gaussians.mask_splats(non_prune_mask)
+            gaussian_importance = gaussian_importance[non_prune_mask]
+            color_importance = color_importance[non_prune_mask]
+            color2_contribution_n = color2_contribution_n[non_prune_mask]
+            print(f"最后高斯球的个数：{color_importance.shape[0]}")
+        
+        if color_comp is not None:
+            compress_color(
+                gaussians,
+                color2_contribution_n,
+                # color_importance,
+                color_comp,
+                color_compress_non_dir,
+            )
+        if gaussian_comp is not None:
+            compress_covariance(
+                gaussians,
+                gaussian_importance,
+                gaussian_comp,
+            )

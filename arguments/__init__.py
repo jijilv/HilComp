@@ -69,11 +69,17 @@ class PipelineParams(ParamGroup):
 class CompressionParams(ParamGroup):
     def __init__(self, parser):
         self.load_iteration = -1
-        self.finetune_iterations = 5000
+        self.finetune_iterations = 0
+        # self.finetune_iterations = 5000
 
-        # self.color_codebook_size = 2**12
-        self.color_codebook_size = 2**18
-        # self.color_importance_include = 0.6*1e-6
+        self.color_codebook_size = 2**15
+        # self.color_codebook_size = 2**19
+        # self.color_codebook_size = 120000
+        # self.color_codebook_size = 180000
+        # self.color_codebook_size = 200000
+        # self.color_codebook_size = 360000
+        # self.color_codebook_size = 720000
+        self.color_importance_include = 0.6*1e-6
         # self.color_importance_include = 0.9*1e-6
         # self.color_importance_include = 1.2*1e-6
         # self.color_importance_include = 1.8*1e-6
@@ -82,21 +88,27 @@ class CompressionParams(ParamGroup):
         # self.color_importance_include = 3.6*1e-6
         # self.color_importance_include = 6.0*1e-6
         # self.color_importance_include = 1.2*1e-5
-        self.color_importance_include = 1
+        # self.color_importance_include = 1
         self.color_importance_prune = 0.0
         self.color_cluster_iterations = 100
         # self.color_cluster_iterations = 800
         self.color_decay = 0.8
-        self.color_batch_size = 2**20
+        self.color_batch_size = 2**18
         # self.color_batch_size = 2**20
         self.color_weights_per_param = False
         self.color_compress_non_dir = True
-        self.not_compress_color = False
-        # self.not_compress_color = True
+        # self.not_compress_color = False
+        self.not_compress_color = True
 
-        # self.gaussian_codebook_size = 2**12
-        self.gaussian_codebook_size = 2**18
-        # self.gaussian_importance_include = 0.3*1e-5
+        self.gaussian_codebook_size = 2**15
+        # self.gaussian_codebook_size = 2**19
+        # self.gaussian_codebook_size = 200000
+        # self.gaussian_codebook_size = 120000
+        # self.gaussian_codebook_size = 180000
+        # self.gaussian_codebook_size = 200000
+        # self.gaussian_codebook_size = 360000
+        # self.gaussian_codebook_size = 720000
+        self.gaussian_importance_include = 0.3*1e-5
         # self.gaussian_importance_include = 0.6*1e-5
         # self.gaussian_importance_include = 0.9*1e-5
         # self.gaussian_importance_include = 1.2*1e-5
@@ -109,13 +121,13 @@ class CompressionParams(ParamGroup):
         # self.gaussian_importance_include = 7.5*1e-5
         # self.gaussian_importance_include = 9.0*1e-5
         # self.gaussian_importance_include = 1.8*1e-4
-        self.gaussian_importance_include = 1
+        # self.gaussian_importance_include = 1
         self.gaussian_cluster_iterations = 800
         # self.gaussian_cluster_iterations = 8000
         self.gaussian_decay = 0.8
         self.gaussian_batch_size = 2**20
-        self.not_compress_gaussians = False
-        # self.not_compress_gaussians = True
+        # self.not_compress_gaussians = False
+        self.not_compress_gaussians = True
         self.not_sort_morton = False
         
         # self.prune_threshold = 3.0*1e-9
@@ -145,7 +157,8 @@ class OptimizationParams(ParamGroup):
         self.densify_until_iter = 15_000
         self.densify_grad_threshold = 0.0002
         self.random_background = False
-        self.not_quantization_aware = False
+        # self.not_quantization_aware = False
+        self.not_quantization_aware = True
         super().__init__(parser, "Optimization Parameters")
 
 

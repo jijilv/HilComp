@@ -3,17 +3,24 @@ import subprocess
 
 def main():
     # 设置要调用的脚本和参数
-    # script_path = "/home/kemove/github/c3dgs/compress.py"
-    # model_path = "/home/kemove/data/3dgs_models/bonsai"
-    # data_device = "cuda"
-    # output_vq = "/home/kemove/output/bonsai-vq/"
-    # source_path = "/home/kemove/data/360/bonsai"  # 这里设置你的 source_path
-
-    script_path = "/home/kemove/github/c3dgs/compresshi.py"
-    model_path = "/home/kemove/data/3dgs_models/bonsai"
+    script_path = "/home/kemove/github/hilcomp/compress.py"
+    model_path = "/mnt/hy/data/3dgs_models/truck"
     data_device = "cuda"
-    output_vq = "/home/kemove/output/bonsai-hi/"
-    source_path = "/home/kemove/data/360/bonsai"  # 这里设置你的 source_path
+    output_vq = "/mnt/hy/output/truck-vq-99/"
+    source_path = "/mnt/hy/data/tandt/truck"  # 这里设置你的 source_path
+
+    # script_path = "/home/kemove/github/c3dgs/compresshi.py"
+    # model_path = "/mnt/hy/data/3dgs_models/hollywood"
+    # data_device = "cuda"
+    # output_vq = "/mnt/hy/output/hollywood-hi/"
+    # source_path = "/mnt/hy/data/bungeenerf/hollywood"  # 这里设置你的 source_path
+    # resolution = 1
+
+    # script_path = "/home/kemove/github/c3dgs/compresshi.py"
+    # model_path = "/home/kemove/data/3dgs_models/rubble"
+    # data_device = "cuda"
+    # output_vq = "/home/kemove/output/rubble-hi/"
+    # source_path = "/home/kemove/data/meganerf/rubble"  # 这里设置你的 source_path
 
 
     # 准备命令

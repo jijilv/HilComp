@@ -87,9 +87,14 @@
 #     with open(os.path.join(output_folder, "cfg_args"), "w") as cfg_log_f:
 #         cfg_log_f.write(str(Namespace(**vars(args))))
 
+import gc
 import os
+from typing import Dict
 import torch
 from random import randint
+from arguments import ModelParams, PipelineParams
+from lpipsPyTorch import lpips
+from scene.gaussian_model import GaussianModel
 from utils.loss_utils import l1_loss, ssim
 from gaussian_renderer import render 
 # from gaussian_renderer2 import render 
@@ -169,6 +174,13 @@ def finetune(scene: Scene, dataset, opt, comp, pipe, testing_iterations, debug_f
                 scene.gaussians.optimizer.zero_grad()
         optimizer_end_time = time.time()
 
+        # 每5000次迭代对模型进行评估
+        if iteration % 5000 == 0 or iteration == max_iter:
+            print(f"Evaluating model at iteration {iteration}...")
+            metrics = render_and_eval(scene.gaussians, scene, dataset, pipe)
+            print(f"Metrics at iteration {iteration}: {metrics}")
+
+
         # 每100次迭代打印一次时间信息
         # if iteration % 10 == 0:
         #     iter_end_time = time.time()
@@ -194,3 +206,37 @@ def prepare_output_and_logger(output_folder, args):
     os.makedirs(output_folder, exist_ok=True)
     with open(os.path.join(output_folder, "cfg_args"), "w") as cfg_log_f:
         cfg_log_f.write(str(Namespace(**vars(args))))
+
+def render_and_eval(
+    gaussians: GaussianModel,
+    scene: Scene,
+    model_params: ModelParams,
+    pipeline_params: PipelineParams,
+) -> Dict[str, float]:
+    with torch.no_grad():
+        ssims = []
+        psnrs = []
+        lpipss = []
+
+        views = scene.getTestCameras()
+
+        bg_color = [1, 1, 1] if model_params.white_background else [0, 0, 0]
+        background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+
+        for view in tqdm(views, desc="Rendering progress"):
+            rendering = render(view, gaussians, pipeline_params, background)[
+                "render"
+            ].unsqueeze(0)
+            gt = view.original_image[0:3, :, :].unsqueeze(0)
+
+            ssims.append(ssim(rendering, gt))
+            psnrs.append(psnr(rendering, gt))
+            lpipss.append(lpips(rendering, gt, net_type="vgg"))
+            gc.collect()
+            torch.cuda.empty_cache()
+
+        return {
+            "SSIM": torch.tensor(ssims).mean().item(),
+            "PSNR": torch.tensor(psnrs).mean().item(),
+            "LPIPS": torch.tensor(lpipss).mean().item(),
+        }

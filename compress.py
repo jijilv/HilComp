@@ -174,6 +174,41 @@ def calc_importance2(
     return dc_importance.detach(), sh_importance.detach(), cov_grad.detach(), opacity_contribution.detach()
 
 
+# def render_and_eval(
+#     gaussians: GaussianModel,
+#     scene: Scene,
+#     model_params: ModelParams,
+#     pipeline_params: PipelineParams,
+# ) -> Dict[str, float]:
+#     with torch.no_grad():
+#         ssims = []
+#         psnrs = []
+#         lpipss = []
+
+#         views = scene.getTestCameras()
+
+#         bg_color = [1, 1, 1] if model_params.white_background else [0, 0, 0]
+#         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+
+#         for view in tqdm(views, desc="Rendering progress"):
+#             rendering = render(view, gaussians, pipeline_params, background)[
+#                 "render"
+#             ].unsqueeze(0)
+#             gt = view.original_image[0:3, :, :].unsqueeze(0)
+
+#             ssims.append(ssim(rendering, gt))
+#             psnrs.append(psnr(rendering, gt))
+#             lpipss.append(lpips(rendering, gt, net_type="vgg"))
+#             gc.collect()
+#             torch.cuda.empty_cache()
+
+#         return {
+#             "SSIM": torch.tensor(ssims).mean().item(),
+#             "PSNR": torch.tensor(psnrs).mean().item(),
+#             "LPIPS": torch.tensor(lpipss).mean().item(),
+#         }
+
+
 def render_and_eval(
     gaussians: GaussianModel,
     scene: Scene,
@@ -184,6 +219,7 @@ def render_and_eval(
         ssims = []
         psnrs = []
         lpipss = []
+        render_time_list = []  # 用于存储每次渲染的时间
 
         views = scene.getTestCameras()
 
@@ -191,9 +227,15 @@ def render_and_eval(
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
         for view in tqdm(views, desc="Rendering progress"):
-            rendering = render(view, gaussians, pipeline_params, background)[
-                "render"
-            ].unsqueeze(0)
+            torch.cuda.synchronize()
+            start_time = time.time()
+            rendering = render(view, gaussians, pipeline_params, background)["render"].unsqueeze(0)
+            torch.cuda.synchronize()
+            end_time = time.time()
+
+            render_time_ms = (end_time - start_time) * 1000  # 渲染时间（毫秒）
+            render_time_list.append(render_time_ms)
+
             gt = view.original_image[0:3, :, :].unsqueeze(0)
 
             ssims.append(ssim(rendering, gt))
@@ -202,12 +244,19 @@ def render_and_eval(
             gc.collect()
             torch.cuda.empty_cache()
 
+        # 计算平均渲染时间和FPS
+        mean_render_time_ms = sum(render_time_list) / len(render_time_list)
+        mean_render_time_seconds = mean_render_time_ms / 1000
+        fps = 1.0 / mean_render_time_seconds
+
+        print(f"Mean render time: {mean_render_time_ms:.2f} ms")
+        print(f"FPS: {fps:.2f}")
+
         return {
             "SSIM": torch.tensor(ssims).mean().item(),
             "PSNR": torch.tensor(psnrs).mean().item(),
             "LPIPS": torch.tensor(lpipss).mean().item(),
         }
-
 
 def run_vq(
     model_params: ModelParams,

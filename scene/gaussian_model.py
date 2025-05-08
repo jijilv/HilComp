@@ -445,7 +445,8 @@ class GaussianModel:
         self,
         path,
         compress: bool = True,
-        half_precision: bool = False,
+        # compress: bool = False,
+        half_precision: bool = True,
         sort_morton=False,
     ):
         with torch.no_grad():
